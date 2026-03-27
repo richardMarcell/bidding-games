@@ -12,8 +12,10 @@
     var currentState = window.APP_INITIAL_STATE || null;
     var pollTimer = null;
     var roomTimer = null;
+    var countdownTimer = null;
     var isPolling = false;
     var messageTimer = null;
+    var answerAutoSubmitInFlight = false;
     var lastStateKey = '';
     var lastRoomListKey = '';
     var drafts = {
@@ -31,6 +33,13 @@
         currentState.viewer.current_is_correct ? '1' : '0',
         currentState.viewer.current_score_delta
     ].join(':') : '';
+    var countdownSnapshot = {
+        key: '',
+        baseSeconds: null,
+        receivedAt: 0,
+        paused: false,
+        expiredHandled: false
+    };
 
     function byId(id) {
         return document.getElementById(id);
@@ -107,7 +116,7 @@
         }
 
         if (state.room.round_phase === 'answering') {
-            return 'Soal sudah terbuka. Semua player yang sudah bid sedang menjawab secara bersamaan.';
+            return 'Soal sudah terbuka. Semua player yang sudah bid hanya punya 15 detik untuk menjawab secara bersamaan.';
         }
 
         if (state.room.round_phase === 'review') {
@@ -115,6 +124,105 @@
         }
 
         return 'Game sedang berlangsung.';
+    }
+
+    function hasAnswerTimer(state) {
+        return !!(
+            state &&
+            state.room &&
+            state.room.round_phase === 'answering' &&
+            state.room.answer_timer_seconds_left !== null &&
+            state.room.answer_timer_seconds_left !== undefined
+        );
+    }
+
+    function syncCountdownSnapshot(state) {
+        if (!hasAnswerTimer(state)) {
+            countdownSnapshot.key = '';
+            countdownSnapshot.baseSeconds = null;
+            countdownSnapshot.receivedAt = 0;
+            countdownSnapshot.paused = false;
+            countdownSnapshot.expiredHandled = false;
+            return;
+        }
+
+        var nextKey = [
+            state.current_question ? state.current_question.id : 'none',
+            state.room.status,
+            state.room.round_phase,
+            state.room.answer_timer_seconds_left
+        ].join(':');
+
+        if (countdownSnapshot.key === nextKey) {
+            return;
+        }
+
+        countdownSnapshot.key = nextKey;
+        countdownSnapshot.baseSeconds = Number(state.room.answer_timer_seconds_left || 0);
+        countdownSnapshot.receivedAt = Date.now();
+        countdownSnapshot.paused = !!state.room.answer_timer_paused;
+        countdownSnapshot.expiredHandled = false;
+    }
+
+    function getLiveAnswerTimerSeconds(state) {
+        if (!hasAnswerTimer(state)) {
+            return null;
+        }
+
+        if (countdownSnapshot.key === '') {
+            syncCountdownSnapshot(state);
+        }
+
+        if (countdownSnapshot.paused) {
+            return Math.max(0, Number(state.room.answer_timer_seconds_left || 0));
+        }
+
+        return Math.max(
+            0,
+            Number(countdownSnapshot.baseSeconds || 0) - Math.floor((Date.now() - countdownSnapshot.receivedAt) / 1000)
+        );
+    }
+
+    function renderAnswerTimer(state) {
+        var roundTimerLabel = byId('roundTimerLabel');
+
+        if (!roundTimerLabel) {
+            return;
+        }
+
+        var secondsLeft = getLiveAnswerTimerSeconds(state);
+
+        if (state.room.status === 'finished' || secondsLeft === null) {
+            roundTimerLabel.textContent = '';
+            roundTimerLabel.className = 'pill hidden';
+            return;
+        }
+
+        roundTimerLabel.className = 'pill pill-timer';
+
+        if (state.room.answer_timer_paused) {
+            roundTimerLabel.className += ' pill-timer-paused';
+            roundTimerLabel.textContent = 'Timer dijeda: ' + secondsLeft + ' dtk';
+            return;
+        }
+
+        if (secondsLeft <= 5) {
+            roundTimerLabel.className += ' pill-timer-danger';
+        }
+
+        roundTimerLabel.textContent = 'Sisa ' + secondsLeft + ' dtk';
+    }
+
+    function getFinishedRedirectPath(state) {
+        if (!state || !state.room || state.room.status !== 'finished') {
+            return '';
+        }
+
+        if (page === 'spectate') {
+            return 'leaderboard.php?room=' + encodeURIComponent(state.room.code || roomCode);
+        }
+
+        return 'leaderboard.php';
     }
 
     function showMessage(message, type, timeoutMs) {
@@ -276,6 +384,106 @@
                 answerStatus.classList.remove('result-text-correct', 'result-text-wrong');
             }
         }
+
+        syncCountdownSnapshot(nextState);
+    }
+
+    async function submitAnswerValue(answerValue, options) {
+        var trimmedAnswer = String(answerValue || '').trim();
+        var answerSubmitBtn = byId('answerSubmitBtn');
+        var isAutoSubmit = !!(options && options.autoSubmit);
+
+        if (!trimmedAnswer) {
+            if (!isAutoSubmit) {
+                showMessage('Jawaban teks tidak boleh kosong.', 'error');
+            }
+
+            return false;
+        }
+
+        if (isAutoSubmit) {
+            answerAutoSubmitInFlight = true;
+        }
+
+        setButtonBusy(answerSubmitBtn, true, isAutoSubmit ? 'Auto submit...' : 'Mengirim...');
+
+        try {
+            var payload = await sendRequest(apiBase + '/submit_answer.php', 'POST', {
+                answer: answerValue
+            });
+
+            drafts.answer = answerValue;
+
+            if (payload.round_reviewed && payload.correct_answer) {
+                showMessage(payload.message + ' Kunci: ' + payload.correct_answer + '.', 'success', 5000);
+            } else if (isAutoSubmit) {
+                showMessage('Waktu habis. Jawaban terakhir kamu berhasil dikirim otomatis.', 'success', 4000);
+            } else {
+                showMessage(payload.message, 'success');
+            }
+
+            await pollState();
+
+            return true;
+        } catch (error) {
+            if (isAutoSubmit) {
+                showMessage('Waktu habis. Ronde ditutup otomatis.', 'info', 3500);
+                await pollState();
+                return false;
+            }
+
+            showMessage(error.message, 'error');
+            return false;
+        } finally {
+            if (isAutoSubmit) {
+                answerAutoSubmitInFlight = false;
+            }
+
+            setButtonBusy(answerSubmitBtn, false);
+            renderCoreState(currentState);
+        }
+    }
+
+    async function maybeHandleAnswerTimerExpiry() {
+        if (!currentState || !currentState.room || !currentState.room.answer_timer_active) {
+            return;
+        }
+
+        if (getLiveAnswerTimerSeconds(currentState) > 0 || countdownSnapshot.expiredHandled) {
+            return;
+        }
+
+        countdownSnapshot.expiredHandled = true;
+
+        if (currentState.viewer
+            && currentState.viewer.role === 'player'
+            && currentState.viewer.can_answer
+            && !answerAutoSubmitInFlight) {
+            var answerText = byId('answerText');
+            var answerValue = answerText ? answerText.value : drafts.answer;
+
+            if (String(answerValue || '').trim()) {
+                await submitAnswerValue(answerValue, { autoSubmit: true });
+                return;
+            }
+        }
+
+        await pollState();
+    }
+
+    function startCountdownTicker() {
+        if (countdownTimer) {
+            window.clearInterval(countdownTimer);
+        }
+
+        countdownTimer = window.setInterval(function () {
+            if (!currentState) {
+                return;
+            }
+
+            renderAnswerTimer(currentState);
+            maybeHandleAnswerTimerExpiry();
+        }, 250);
     }
 
     function renderLiveRooms(rooms) {
@@ -425,6 +633,8 @@
             spectateStatusLabel.textContent = state.room.status;
         }
 
+        renderAnswerTimer(state);
+
         if (state.room.status === 'finished') {
             if (questionContent) {
                 questionContent.innerHTML = '<p>Semua ronde telah selesai. Lihat hasil akhir pada leaderboard final.</p>';
@@ -439,7 +649,15 @@
 
         if (state.room.status === 'paused') {
             if (questionFeedback) {
-                questionFeedback.innerHTML = '<p>Game sedang dijeda oleh host. Semua input pemain dikunci sementara.</p>';
+                var pausedLines = ['Game sedang dijeda oleh host. Semua input pemain dikunci sementara.'];
+
+                if (state.room.answer_timer_paused) {
+                    pausedLines.push('Countdown jawaban ikut dijeda dengan sisa ' + getLiveAnswerTimerSeconds(state) + ' detik.');
+                }
+
+                questionFeedback.innerHTML = pausedLines.map(function (line) {
+                    return '<p>' + escapeHtml(line) + '</p>';
+                }).join('');
             }
         }
 
@@ -502,7 +720,16 @@
 
             if (state.room.round_phase === 'answering') {
                 lines.push('Semua jawaban diproses bersama setelah seluruh player selesai menjawab.');
+                lines.push('Jika waktu habis sebelum dikirim, sistem akan auto-submit jawaban yang belum masuk.');
                 lines.push(state.summary.waiting_for_answer + ' player lagi belum mengirim jawaban.');
+
+                if (hasAnswerTimer(state)) {
+                    if (state.room.answer_timer_paused) {
+                        lines.push('Timer jawaban sedang dijeda dengan sisa ' + getLiveAnswerTimerSeconds(state) + ' detik.');
+                    } else {
+                        lines.push('Sisa waktu saat ini: ' + getLiveAnswerTimerSeconds(state) + ' detik.');
+                    }
+                }
             }
 
             if (state.room.round_phase === 'review') {
@@ -733,6 +960,8 @@
                         'Ronde sudah direview. Jawaban kamu ' + pausedResultText +
                         ' dengan delta skor ' + state.viewer.current_score_delta +
                         '. Game sedang dijeda sementara.';
+                } else if (state.room.answer_timer_paused) {
+                    answerStatus.textContent = 'Jawaban dijeda. Countdown berhenti sementara dengan sisa ' + getLiveAnswerTimerSeconds(state) + ' detik.';
                 } else {
                     answerStatus.textContent = 'Jawaban dikunci sementara sampai host melanjutkan game.';
                 }
@@ -830,7 +1059,7 @@
                 if (state.viewer.has_answer) {
                     answerStatus.textContent = 'Jawaban kamu sudah terkunci. Menunggu player lain.';
                 } else if (state.viewer.can_answer) {
-                    answerStatus.textContent = 'Ketik jawaban teks kamu lalu kirim.';
+                    answerStatus.textContent = 'Ketik jawaban teks kamu lalu kirim. Jika waktu habis, draft yang sudah kamu tulis akan dicoba dikirim otomatis.';
                 } else {
                     answerStatus.textContent = 'Kamu tidak bisa menjawab karena tidak ikut bidding pada ronde ini.';
                 }
@@ -919,6 +1148,12 @@
                 }
             } else if (state.room.round_phase === 'answering') {
                 moderatorSummary.textContent = state.summary.players_answered + ' dari ' + state.summary.players_required_to_answer + ' player sudah menjawab.';
+
+                if (hasAnswerTimer(state)) {
+                    moderatorSummary.textContent += state.room.answer_timer_paused
+                        ? ' Timer dijeda di ' + getLiveAnswerTimerSeconds(state) + ' detik.'
+                        : ' Sisa waktu ' + getLiveAnswerTimerSeconds(state) + ' detik.';
+                }
             } else {
                 moderatorSummary.textContent = 'Semua jawaban sudah dinilai. Moderator bisa lanjut ke ronde berikutnya.';
             }
@@ -1012,6 +1247,8 @@
             return;
         }
 
+        syncCountdownSnapshot(state);
+
         if (page === 'lobby') {
             renderLobbyState(state);
             return;
@@ -1032,9 +1269,15 @@
         try {
             var state = await refreshState();
             var key = stateKey(state);
+            var finishedRedirectPath = getFinishedRedirectPath(state);
 
             currentState = state;
             syncDrafts(state);
+
+            if (finishedRedirectPath) {
+                window.location.href = finishedRedirectPath;
+                return;
+            }
 
             if (key !== lastStateKey) {
                 lastStateKey = key;
@@ -1182,6 +1425,7 @@
         lastStateKey = stateKey(currentState);
         renderCoreState(currentState);
         startStatePolling();
+        startCountdownTicker();
 
         var bidAmount = byId('bidAmount');
         var bidForm = byId('bidForm');
@@ -1230,36 +1474,8 @@
         if (answerForm) {
             answerForm.addEventListener('submit', async function (event) {
                 event.preventDefault();
-                var answerSubmitBtn = byId('answerSubmitBtn');
                 var answerValue = answerText ? answerText.value : '';
-
-                if (!String(answerValue || '').trim()) {
-                    showMessage('Jawaban teks tidak boleh kosong.', 'error');
-                    return;
-                }
-
-                setButtonBusy(answerSubmitBtn, true, 'Mengirim...');
-
-                try {
-                    var payload = await sendRequest(apiBase + '/submit_answer.php', 'POST', {
-                        answer: answerValue
-                    });
-
-                    drafts.answer = answerValue;
-
-                    if (payload.round_reviewed && payload.correct_answer) {
-                        showMessage(payload.message + ' Kunci: ' + payload.correct_answer + '.', 'success', 5000);
-                    } else {
-                        showMessage(payload.message, 'success');
-                    }
-
-                    await pollState();
-                } catch (error) {
-                    showMessage(error.message, 'error');
-                } finally {
-                    setButtonBusy(answerSubmitBtn, false);
-                    renderCoreState(currentState);
-                }
+                await submitAnswerValue(answerValue);
             });
         }
 
@@ -1325,6 +1541,7 @@
         lastStateKey = stateKey(currentState);
         renderCoreState(currentState);
         startStatePolling();
+        startCountdownTicker();
     }
 
     if (page === 'index') {
@@ -1344,6 +1561,10 @@
 
         if (roomTimer) {
             window.clearInterval(roomTimer);
+        }
+
+        if (countdownTimer) {
+            window.clearInterval(countdownTimer);
         }
     });
 })();

@@ -10,6 +10,10 @@ if (!$room) {
     redirectTo('index.php');
 }
 
+if ($room['status'] === 'finished') {
+    redirectTo('leaderboard.php?room=' . urlencode($roomCode));
+}
+
 $viewer = [
     'id' => 0,
     'username' => 'Spectator',
@@ -65,7 +69,10 @@ $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
                         <h2 id="questionNumberLabel">Room Spectate</h2>
                     </div>
 
-                    <span class="pill" id="progressLabel">Progress</span>
+                    <div class="panel-meta">
+                        <span class="pill" id="progressLabel">Progress</span>
+                        <span class="pill hidden" id="roundTimerLabel">Timer</span>
+                    </div>
                 </div>
 
                 <div id="questionContent" class="question-copy question-copy-large"></div>

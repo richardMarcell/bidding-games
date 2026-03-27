@@ -34,6 +34,8 @@ try {
         fail('Data room atau user tidak ditemukan.', 404);
     }
 
+    $freshRoom = expireAnsweringRoundIfNeeded($pdo, $freshRoom);
+
     if ($freshRoom['status'] === 'paused') {
         $pdo->rollBack();
         fail('Game sedang dihentikan sementara oleh host.');
@@ -45,8 +47,17 @@ try {
     }
 
     if (($freshRoom['round_phase'] ?? '') !== 'answering') {
-        $pdo->rollBack();
-        fail('Jawaban belum dibuka. Semua player aktif harus selesai bidding terlebih dahulu.');
+        $message = ($freshRoom['round_phase'] ?? '') === 'review'
+            ? 'Waktu menjawab untuk ronde ini sudah habis atau semua jawaban sudah terkunci.'
+            : 'Jawaban belum dibuka. Semua player aktif harus selesai bidding terlebih dahulu.';
+
+        if (($freshRoom['round_phase'] ?? '') === 'review') {
+            $pdo->commit();
+        } else {
+            $pdo->rollBack();
+        }
+
+        fail($message);
     }
 
     $questionStatement = $pdo->prepare('SELECT * FROM questions WHERE id = ? LIMIT 1');
@@ -92,7 +103,11 @@ try {
         evaluateCurrentRound($pdo, $freshRoom);
 
         $updateRoomStatement = $pdo->prepare(
-            "UPDATE rooms SET round_phase = 'review' WHERE id = ?"
+            "UPDATE rooms
+             SET round_phase = 'review',
+                 answer_deadline_at = NULL,
+                 answer_time_remaining_seconds = NULL
+             WHERE id = ?"
         );
         $updateRoomStatement->execute([(int) $freshRoom['id']]);
     }

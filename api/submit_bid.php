@@ -94,7 +94,11 @@ try {
 
     if ($allPlayersReady) {
         $updateRoomStatement = $pdo->prepare(
-            "UPDATE rooms SET round_phase = 'answering' WHERE id = ?"
+            "UPDATE rooms
+             SET round_phase = 'answering',
+                 answer_deadline_at = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL " . ANSWER_TIME_LIMIT_SECONDS . " SECOND),
+                 answer_time_remaining_seconds = NULL
+             WHERE id = ?"
         );
         $updateRoomStatement->execute([(int) $freshRoom['id']]);
     }

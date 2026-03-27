@@ -8,7 +8,7 @@ $user = $context['user'];
 $room = $context['room'];
 
 if ($room['status'] !== 'waiting') {
-    redirectTo('game.php');
+    redirectTo($room['status'] === 'finished' ? 'leaderboard.php' : 'game.php');
 }
 
 $state = buildRoomState($pdo, $user, $room);

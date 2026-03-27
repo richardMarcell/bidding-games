@@ -7,6 +7,44 @@ if (session_status() === PHP_SESSION_NONE) {
 
 $pdo = require __DIR__ . '/database.php';
 
+const ANSWER_TIME_LIMIT_SECONDS = 15;
+
+function ensureAnswerTimerSchema(PDO $pdo): void
+{
+    static $checked = false;
+
+    if ($checked) {
+        return;
+    }
+
+    $checked = true;
+
+    $statement = $pdo->query(
+        "SELECT COLUMN_NAME
+         FROM INFORMATION_SCHEMA.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME = 'rooms'
+           AND COLUMN_NAME IN ('answer_deadline_at', 'answer_time_remaining_seconds')"
+    );
+    $columns = $statement->fetchAll(PDO::FETCH_COLUMN) ?: [];
+
+    if (!in_array('answer_deadline_at', $columns, true)) {
+        $pdo->exec(
+            "ALTER TABLE rooms
+             ADD COLUMN answer_deadline_at TIMESTAMP NULL DEFAULT NULL AFTER current_question_id"
+        );
+    }
+
+    if (!in_array('answer_time_remaining_seconds', $columns, true)) {
+        $pdo->exec(
+            "ALTER TABLE rooms
+             ADD COLUMN answer_time_remaining_seconds SMALLINT UNSIGNED NULL DEFAULT NULL AFTER answer_deadline_at"
+        );
+    }
+}
+
+ensureAnswerTimerSchema($pdo);
+
 function jsonResponse(array $payload, int $statusCode = 200): void
 {
     http_response_code($statusCode);
@@ -134,6 +172,15 @@ function getQuestionByRound(PDO $pdo, int $round): ?array
 function fetchRoomById(PDO $pdo, int $roomId): ?array
 {
     $statement = $pdo->prepare('SELECT * FROM rooms WHERE id = ? LIMIT 1');
+    $statement->execute([$roomId]);
+    $room = $statement->fetch();
+
+    return $room ?: null;
+}
+
+function fetchRoomByIdForUpdate(PDO $pdo, int $roomId): ?array
+{
+    $statement = $pdo->prepare('SELECT * FROM rooms WHERE id = ? LIMIT 1 FOR UPDATE');
     $statement->execute([$roomId]);
     $room = $statement->fetch();
 
@@ -417,8 +464,128 @@ function evaluateCurrentRound(PDO $pdo, array $room): void
     }
 }
 
+function getAnswerTimerSecondsLeft(PDO $pdo, array $room): ?int
+{
+    if (($room['round_phase'] ?? '') !== 'answering') {
+        return null;
+    }
+
+    if (($room['status'] ?? '') === 'paused') {
+        if ($room['answer_time_remaining_seconds'] === null) {
+            return null;
+        }
+
+        return max(0, (int) $room['answer_time_remaining_seconds']);
+    }
+
+    if (($room['status'] ?? '') !== 'playing' || empty($room['answer_deadline_at'])) {
+        return null;
+    }
+
+    $statement = $pdo->prepare(
+        "SELECT GREATEST(
+            CEILING(TIMESTAMPDIFF(MICROSECOND, CURRENT_TIMESTAMP, answer_deadline_at) / 1000000),
+            0
+        )
+         FROM rooms
+         WHERE id = ?
+         LIMIT 1"
+    );
+    $statement->execute([(int) $room['id']]);
+    $secondsLeft = $statement->fetchColumn();
+
+    if ($secondsLeft === false || $secondsLeft === null) {
+        return null;
+    }
+
+    return (int) $secondsLeft;
+}
+
+function expireAnsweringRoundIfNeeded(PDO $pdo, array $room): array
+{
+    if (($room['status'] ?? '') !== 'playing'
+        || ($room['round_phase'] ?? '') !== 'answering'
+        || empty($room['current_question_id'])
+        || empty($room['answer_deadline_at'])) {
+        return $room;
+    }
+
+    $statement = $pdo->prepare(
+        'SELECT CURRENT_TIMESTAMP >= answer_deadline_at FROM rooms WHERE id = ? LIMIT 1'
+    );
+    $statement->execute([(int) $room['id']]);
+    $isExpired = (bool) $statement->fetchColumn();
+
+    if (!$isExpired) {
+        return $room;
+    }
+
+    $markTimedOutAnswersStatement = $pdo->prepare(
+        "UPDATE bids b
+         INNER JOIN users u ON u.id = b.user_id
+         SET b.answer_text = '', b.answered_at = COALESCE(b.answered_at, CURRENT_TIMESTAMP)
+         WHERE b.room_id = ? AND b.question_id = ? AND u.role = 'player'
+           AND (b.answer_text IS NULL OR b.answer_text = '')"
+    );
+    $markTimedOutAnswersStatement->execute([
+        (int) $room['id'],
+        (int) $room['current_question_id'],
+    ]);
+
+    evaluateCurrentRound($pdo, $room);
+
+    $updateRoomStatement = $pdo->prepare(
+        "UPDATE rooms
+         SET round_phase = 'review',
+             answer_deadline_at = NULL,
+             answer_time_remaining_seconds = NULL
+         WHERE id = ?"
+    );
+    $updateRoomStatement->execute([(int) $room['id']]);
+
+    $room['round_phase'] = 'review';
+    $room['answer_deadline_at'] = null;
+    $room['answer_time_remaining_seconds'] = null;
+
+    return $room;
+}
+
+function synchronizeRoomLifecycle(PDO $pdo, int $roomId): ?array
+{
+    $pdo->beginTransaction();
+
+    try {
+        $room = fetchRoomByIdForUpdate($pdo, $roomId);
+
+        if (!$room) {
+            $pdo->rollBack();
+
+            return null;
+        }
+
+        $room = expireAnsweringRoundIfNeeded($pdo, $room);
+        $pdo->commit();
+
+        return $room;
+    } catch (Throwable $exception) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+
+        throw $exception;
+    }
+}
+
 function buildRoomState(PDO $pdo, array $viewer, array $room): array
 {
+    if (!$pdo->inTransaction()) {
+        $synchronizedRoom = synchronizeRoomLifecycle($pdo, (int) $room['id']);
+
+        if ($synchronizedRoom) {
+            $room = $synchronizedRoom;
+        }
+    }
+
     $viewerRole = $viewer['role'] ?? 'spectator';
     $viewerId = (int) ($viewer['id'] ?? 0);
     $isSpectator = $viewerRole === 'spectator';
@@ -534,6 +701,7 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
     $viewerHasBid = $viewerBid !== null;
     $viewerHasAnswer = $viewerHasBid && ($viewerBid['has_answer'] ?? false);
     $viewerHasEnoughPointsToBid = $viewerRole === 'player' && canBidWithScore((int) ($viewer['score'] ?? 0));
+    $answerTimerSecondsLeft = getAnswerTimerSecondsLeft($pdo, $room);
     $questionVisible = $currentQuestion
         && in_array($room['status'], ['playing', 'paused'], true)
         && $room['round_phase'] !== 'bidding';
@@ -572,6 +740,14 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
             'round_phase' => $room['round_phase'],
             'current_round' => (int) $room['current_round'],
             'total_questions' => $questionCount,
+            'answer_timer_seconds_left' => $answerTimerSecondsLeft,
+            'answer_timer_duration_seconds' => ANSWER_TIME_LIMIT_SECONDS,
+            'answer_timer_active' => $room['status'] === 'playing'
+                && $room['round_phase'] === 'answering'
+                && $answerTimerSecondsLeft !== null,
+            'answer_timer_paused' => $room['status'] === 'paused'
+                && $room['round_phase'] === 'answering'
+                && $answerTimerSecondsLeft !== null,
             'can_start' => $canStart,
             'can_next' => $canNext,
             'can_pause' => $canPause,

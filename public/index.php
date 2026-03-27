@@ -15,7 +15,15 @@ if ($existingUserId > 0 && $existingRoomId > 0) {
     $existingRoom = fetchRoomById($pdo, $existingRoomId);
 
     if ($existingUser && $existingRoom && (int) $existingUser['room_id'] === (int) $existingRoom['id']) {
-        redirectTo($existingRoom['status'] === 'waiting' ? 'lobby.php' : 'game.php');
+        if ($existingRoom['status'] === 'waiting') {
+            redirectTo('lobby.php');
+        }
+
+        if ($existingRoom['status'] === 'finished') {
+            redirectTo('leaderboard.php');
+        }
+
+        redirectTo('game.php');
     }
 
     clearUserSession();
@@ -51,7 +59,7 @@ if ($existingUserId > 0 && $existingRoomId > 0) {
                 <div id="globalMessage" class="notice hidden"></div>
 
                 <div class="dual-form">
-                    <article class="form-card">
+                    <article id="createRoomSection" class="form-card">
                         <div class="panel-heading">
                             <div>
                                 <span class="eyebrow">Moderator</span>

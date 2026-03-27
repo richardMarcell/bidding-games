@@ -23,6 +23,8 @@ try {
         fail('Room tidak ditemukan.', 404);
     }
 
+    $freshRoom = expireAnsweringRoundIfNeeded($pdo, $freshRoom);
+
     if ($freshRoom['status'] === 'waiting') {
         $pdo->rollBack();
         fail('Game belum dimulai.');
@@ -35,7 +37,10 @@ try {
 
     $updateStatement = $pdo->prepare(
         "UPDATE rooms
-         SET status = 'finished', current_question_id = NULL
+         SET status = 'finished',
+             current_question_id = NULL,
+             answer_deadline_at = NULL,
+             answer_time_remaining_seconds = NULL
          WHERE id = ?"
     );
     $updateStatement->execute([(int) $freshRoom['id']]);

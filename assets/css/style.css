@@ -171,6 +171,13 @@ textarea {
     margin-bottom: 18px;
 }
 
+.panel-meta {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
 .panel-heading h2,
 .form-section h3,
 .info-card h3 {
@@ -289,6 +296,25 @@ textarea {
 .score-chip {
     background: rgba(38, 25, 15, 0.06);
     font-weight: 700;
+}
+
+.pill-timer {
+    background: rgba(217, 93, 31, 0.12);
+    border-color: rgba(217, 93, 31, 0.22);
+    color: var(--accent-dark);
+    font-weight: 700;
+}
+
+.pill-timer-paused {
+    background: rgba(15, 118, 110, 0.12);
+    border-color: rgba(15, 118, 110, 0.18);
+    color: var(--teal);
+}
+
+.pill-timer-danger {
+    background: rgba(180, 35, 24, 0.12);
+    border-color: rgba(180, 35, 24, 0.24);
+    color: var(--danger);
 }
 
 .notice {

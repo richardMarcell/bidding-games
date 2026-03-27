@@ -53,7 +53,12 @@ try {
 
     $updateStatement = $pdo->prepare(
         "UPDATE rooms
-         SET status = 'playing', round_phase = 'bidding', current_round = 1, current_question_id = ?
+         SET status = 'playing',
+             round_phase = 'bidding',
+             current_round = 1,
+             current_question_id = ?,
+             answer_deadline_at = NULL,
+             answer_time_remaining_seconds = NULL
          WHERE id = ?"
     );
     $updateStatement->execute([(int) $question['id'], (int) $room['id']]);

@@ -23,6 +23,8 @@ try {
         fail('Room tidak ditemukan.', 404);
     }
 
+    $freshRoom = expireAnsweringRoundIfNeeded($pdo, $freshRoom);
+
     if ($freshRoom['status'] === 'waiting') {
         $pdo->rollBack();
         fail('Game belum dimulai.');
@@ -35,8 +37,36 @@ try {
 
     $nextStatus = $freshRoom['status'] === 'paused' ? 'playing' : 'paused';
 
-    $updateStatement = $pdo->prepare('UPDATE rooms SET status = ? WHERE id = ?');
-    $updateStatement->execute([$nextStatus, (int) $freshRoom['id']]);
+    if ($nextStatus === 'paused'
+        && ($freshRoom['round_phase'] ?? '') === 'answering'
+        && !empty($freshRoom['answer_deadline_at'])) {
+        $updateStatement = $pdo->prepare(
+            "UPDATE rooms
+             SET status = 'paused',
+                 answer_time_remaining_seconds = GREATEST(
+                     CEILING(TIMESTAMPDIFF(MICROSECOND, CURRENT_TIMESTAMP, answer_deadline_at) / 1000000),
+                     1
+                 ),
+                 answer_deadline_at = NULL
+             WHERE id = ?"
+        );
+        $updateStatement->execute([(int) $freshRoom['id']]);
+    } elseif ($nextStatus === 'playing'
+        && ($freshRoom['round_phase'] ?? '') === 'answering'
+        && $freshRoom['answer_time_remaining_seconds'] !== null) {
+        $secondsLeft = max(1, (int) $freshRoom['answer_time_remaining_seconds']);
+        $updateStatement = $pdo->prepare(
+            "UPDATE rooms
+             SET status = 'playing',
+                 answer_deadline_at = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL " . $secondsLeft . " SECOND),
+                 answer_time_remaining_seconds = NULL
+             WHERE id = ?"
+        );
+        $updateStatement->execute([(int) $freshRoom['id']]);
+    } else {
+        $updateStatement = $pdo->prepare('UPDATE rooms SET status = ? WHERE id = ?');
+        $updateStatement->execute([$nextStatus, (int) $freshRoom['id']]);
+    }
 
     $pdo->commit();
 

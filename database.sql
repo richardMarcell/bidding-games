@@ -27,6 +27,8 @@ CREATE TABLE rooms (
     round_phase ENUM('bidding', 'answering', 'review') NOT NULL DEFAULT 'bidding',
     current_round INT UNSIGNED NOT NULL DEFAULT 0,
     current_question_id INT UNSIGNED NULL,
+    answer_deadline_at TIMESTAMP NULL DEFAULT NULL,
+    answer_time_remaining_seconds SMALLINT UNSIGNED NULL DEFAULT NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_rooms_current_question

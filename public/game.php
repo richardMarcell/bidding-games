@@ -11,6 +11,10 @@ if ($room['status'] === 'waiting') {
     redirectTo('lobby.php');
 }
 
+if ($room['status'] === 'finished') {
+    redirectTo('leaderboard.php');
+}
+
 $state = buildRoomState($pdo, $user, $room);
 $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_HEX_AMP);
 $isModerator = $user['role'] === 'moderator';
@@ -61,7 +65,10 @@ $isModerator = $user['role'] === 'moderator';
                             <h2 id="questionNumberLabel">Ronde Aktif</h2>
                         </div>
 
-                        <span class="pill" id="progressLabel">Progress</span>
+                        <div class="panel-meta">
+                            <span class="pill" id="progressLabel">Progress</span>
+                            <span class="pill hidden" id="roundTimerLabel">Timer</span>
+                        </div>
                     </div>
 
                     <div id="questionContent" class="question-copy question-copy-large"></div>
@@ -136,7 +143,10 @@ $isModerator = $user['role'] === 'moderator';
                                 <h2 id="questionNumberLabel">Ronde Aktif</h2>
                             </div>
 
-                            <span class="pill" id="progressLabel">Progress</span>
+                            <div class="panel-meta">
+                                <span class="pill" id="progressLabel">Progress</span>
+                                <span class="pill hidden" id="roundTimerLabel">Timer</span>
+                            </div>
                         </div>
 
                         <div id="questionContent" class="question-copy question-copy-large"></div>
