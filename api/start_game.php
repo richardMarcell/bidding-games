@@ -39,6 +39,11 @@ try {
         fail('Minimal harus ada 1 player untuk memulai game.');
     }
 
+    if (countBidEligiblePlayers($pdo, (int) $room['id']) < 1) {
+        $pdo->rollBack();
+        fail('Belum ada player yang punya minimal 2 poin untuk ikut bidding.');
+    }
+
     $question = getQuestionByRound($pdo, 1);
 
     if (!$question) {

@@ -308,45 +308,70 @@ function getRankingData(PDO $pdo, int $roomId): array
     ];
 }
 
-function allPlayersHaveBid(PDO $pdo, int $roomId, int $questionId): bool
+function canBidWithScore(int $score): bool
+{
+    return $score > 1;
+}
+
+function countBidEligiblePlayers(PDO $pdo, int $roomId): int
 {
     $statement = $pdo->prepare(
-        "SELECT
-            (SELECT COUNT(*) FROM users WHERE room_id = ? AND role = 'player') AS player_total,
-            (SELECT COUNT(*)
-             FROM bids b
-             INNER JOIN users u ON u.id = b.user_id
-             WHERE b.room_id = ? AND b.question_id = ? AND u.role = 'player') AS bid_total"
+        "SELECT COUNT(*)
+         FROM users
+         WHERE room_id = ? AND role = 'player' AND score > 1"
     );
-    $statement->execute([$roomId, $roomId, $questionId]);
-    $result = $statement->fetch();
+    $statement->execute([$roomId]);
 
-    if (!$result) {
+    return (int) $statement->fetchColumn();
+}
+
+function countRoundBids(PDO $pdo, int $roomId, int $questionId): int
+{
+    $statement = $pdo->prepare(
+        "SELECT COUNT(*)
+         FROM bids b
+         INNER JOIN users u ON u.id = b.user_id
+         WHERE b.room_id = ? AND b.question_id = ? AND u.role = 'player'"
+    );
+    $statement->execute([$roomId, $questionId]);
+
+    return (int) $statement->fetchColumn();
+}
+
+function countRoundAnswers(PDO $pdo, int $roomId, int $questionId): int
+{
+    $statement = $pdo->prepare(
+        "SELECT COUNT(*)
+         FROM bids b
+         INNER JOIN users u ON u.id = b.user_id
+         WHERE b.room_id = ? AND b.question_id = ? AND u.role = 'player'
+           AND b.answer_text IS NOT NULL AND b.answer_text <> ''"
+    );
+    $statement->execute([$roomId, $questionId]);
+
+    return (int) $statement->fetchColumn();
+}
+
+function allPlayersHaveBid(PDO $pdo, int $roomId, int $questionId): bool
+{
+    $eligiblePlayerTotal = countBidEligiblePlayers($pdo, $roomId);
+
+    if ($eligiblePlayerTotal < 1) {
         return false;
     }
 
-    return (int) $result['player_total'] > 0 && (int) $result['bid_total'] >= (int) $result['player_total'];
+    return countRoundBids($pdo, $roomId, $questionId) >= $eligiblePlayerTotal;
 }
 
 function allPlayersHaveAnswered(PDO $pdo, int $roomId, int $questionId): bool
 {
-    $statement = $pdo->prepare(
-        "SELECT
-            (SELECT COUNT(*) FROM users WHERE room_id = ? AND role = 'player') AS player_total,
-            (SELECT COUNT(*)
-             FROM bids b
-             INNER JOIN users u ON u.id = b.user_id
-             WHERE b.room_id = ? AND b.question_id = ? AND u.role = 'player'
-               AND b.answer_text IS NOT NULL AND b.answer_text <> '') AS answer_total"
-    );
-    $statement->execute([$roomId, $roomId, $questionId]);
-    $result = $statement->fetch();
+    $bidTotal = countRoundBids($pdo, $roomId, $questionId);
 
-    if (!$result) {
+    if ($bidTotal < 1) {
         return false;
     }
 
-    return (int) $result['player_total'] > 0 && (int) $result['answer_total'] >= (int) $result['player_total'];
+    return countRoundAnswers($pdo, $roomId, $questionId) >= $bidTotal;
 }
 
 function evaluateCurrentRound(PDO $pdo, array $room): void
@@ -412,6 +437,8 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
     $rankingData = getRankingData($pdo, (int) $room['id']);
 
     $playerTotal = 0;
+    $bidEligiblePlayers = 0;
+    $playersOutOfPoints = 0;
     $playersBid = 0;
     $playersAnswered = 0;
     $playerMap = [];
@@ -421,6 +448,12 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
     foreach ($players as $player) {
         if ($player['role'] === 'player') {
             $playerTotal++;
+
+            if (canBidWithScore((int) $player['score'])) {
+                $bidEligiblePlayers++;
+            } else {
+                $playersOutOfPoints++;
+            }
         }
     }
 
@@ -489,14 +522,18 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
             'username' => $player['username'],
             'role' => $player['role'],
             'score' => (int) $player['score'],
+            'has_enough_points_to_bid' => $player['role'] === 'player'
+                && canBidWithScore((int) $player['score']),
             'has_bid' => $bidData !== null,
             'has_answer' => $bidData['has_answer'] ?? false,
             'current_bid' => $bidData['bid_amount'] ?? null,
         ];
     }
 
+    $viewerScore = $isSpectator ? null : (int) ($viewer['score'] ?? 0);
     $viewerHasBid = $viewerBid !== null;
     $viewerHasAnswer = $viewerHasBid && ($viewerBid['has_answer'] ?? false);
+    $viewerHasEnoughPointsToBid = $viewerRole === 'player' && canBidWithScore((int) ($viewer['score'] ?? 0));
     $questionVisible = $currentQuestion
         && in_array($room['status'], ['playing', 'paused'], true)
         && $room['round_phase'] !== 'bidding';
@@ -515,9 +552,13 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
         ];
     }
 
-    $everyoneBidded = $playerTotal > 0 && $playersBid >= $playerTotal;
-    $everyoneAnswered = $playerTotal > 0 && $playersAnswered >= $playerTotal;
-    $canStart = $viewerRole === 'moderator' && $room['status'] === 'waiting' && $playerTotal >= 1 && $questionCount > 0;
+    $everyoneBidded = $bidEligiblePlayers > 0 && $playersBid >= $bidEligiblePlayers;
+    $everyoneAnswered = $playersBid > 0 && $playersAnswered >= $playersBid;
+    $canStart = $viewerRole === 'moderator'
+        && $room['status'] === 'waiting'
+        && $playerTotal >= 1
+        && $bidEligiblePlayers >= 1
+        && $questionCount > 0;
     $canNext = $viewerRole === 'moderator' && $room['status'] === 'playing' && $room['round_phase'] === 'review';
     $canPause = $viewerRole === 'moderator' && $room['status'] === 'playing';
     $canResume = $viewerRole === 'moderator' && $room['status'] === 'paused';
@@ -541,7 +582,8 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
             'id' => $viewerId,
             'username' => $viewer['username'] ?? 'Spectator',
             'role' => $viewerRole,
-            'score' => $isSpectator ? null : (int) ($viewer['score'] ?? 0),
+            'score' => $viewerScore,
+            'has_enough_points_to_bid' => $viewerHasEnoughPointsToBid,
             'has_bid' => $viewerHasBid,
             'has_answer' => $viewerHasAnswer,
             'current_bid' => $viewerBid['bid_amount'] ?? null,
@@ -552,7 +594,7 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
                 && $room['status'] === 'playing'
                 && $room['round_phase'] === 'bidding'
                 && !$viewerHasBid
-                && (int) ($viewer['score'] ?? 0) > 1,
+                && $viewerHasEnoughPointsToBid,
             'can_answer' => $viewerRole === 'player'
                 && $room['status'] === 'playing'
                 && $room['round_phase'] === 'answering'
@@ -564,12 +606,15 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
         'responses' => $responses,
         'summary' => [
             'players_total' => $playerTotal,
+            'players_required_to_bid' => $bidEligiblePlayers,
+            'players_required_to_answer' => $playersBid,
+            'players_out_of_points' => $playersOutOfPoints,
             'players_bid' => $playersBid,
             'players_answered' => $playersAnswered,
             'everyone_bidded' => $everyoneBidded,
             'everyone_answered' => $everyoneAnswered,
-            'waiting_for_bid' => max(0, $playerTotal - $playersBid),
-            'waiting_for_answer' => max(0, $playerTotal - $playersAnswered),
+            'waiting_for_bid' => max(0, $bidEligiblePlayers - $playersBid),
+            'waiting_for_answer' => max(0, $playersBid - $playersAnswered),
             'winners' => $rankingData['winners'],
             'ranking' => $rankingData['ranking'],
         ],

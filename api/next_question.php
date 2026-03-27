@@ -69,6 +69,22 @@ try {
         fail('Soal berikutnya tidak ditemukan.', 404);
     }
 
+    if (countBidEligiblePlayers($pdo, (int) $freshRoom['id']) < 1) {
+        $finishStatement = $pdo->prepare(
+            "UPDATE rooms
+             SET status = 'finished', current_question_id = NULL
+             WHERE id = ?"
+        );
+        $finishStatement->execute([(int) $freshRoom['id']]);
+
+        $pdo->commit();
+
+        ok([
+            'message' => 'Game selesai. Tidak ada player yang punya cukup poin untuk lanjut bidding.',
+            'finished' => true,
+        ]);
+    }
+
     $updateStatement = $pdo->prepare(
         "UPDATE rooms
          SET current_round = ?, current_question_id = ?, round_phase = 'bidding'

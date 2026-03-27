@@ -51,7 +51,7 @@ try {
 
     $score = (int) $freshUser['score'];
 
-    if ($score <= 1) {
+    if (!canBidWithScore($score)) {
         $pdo->rollBack();
         fail('Saldo poin tidak cukup. Anda harus memiliki minimal 2 poin untuk bidding.');
     }

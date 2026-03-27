@@ -99,11 +99,15 @@
         }
 
         if (state.room.round_phase === 'bidding') {
-            return 'Semua player sedang mengunci bid. Soal masih disembunyikan sampai semua bid masuk.';
+            if ((state.summary.players_required_to_bid || 0) < 1) {
+                return 'Tidak ada player yang punya cukup poin untuk ikut bidding ronde ini.';
+            }
+
+            return 'Semua player aktif sedang mengunci bid. Soal masih disembunyikan sampai semua bid masuk.';
         }
 
         if (state.room.round_phase === 'answering') {
-            return 'Soal sudah terbuka. Semua player sedang menjawab secara bersamaan.';
+            return 'Soal sudah terbuka. Semua player yang sudah bid sedang menjawab secara bersamaan.';
         }
 
         if (state.room.round_phase === 'review') {
@@ -316,6 +320,10 @@
         }
 
         if (!player.has_bid) {
+            if (!player.has_enough_points_to_bid) {
+                return 'Poin tidak cukup untuk ikut bidding';
+            }
+
             return 'Belum bid';
         }
 
@@ -395,9 +403,9 @@
             if (state.room.status === 'finished') {
                 progressLabel.textContent = 'Final';
             } else if (state.room.round_phase === 'bidding') {
-                progressLabel.textContent = state.summary.players_bid + '/' + state.summary.players_total + ' bid';
+                progressLabel.textContent = state.summary.players_bid + '/' + state.summary.players_required_to_bid + ' bid';
             } else {
-                progressLabel.textContent = state.summary.players_answered + '/' + state.summary.players_total + ' answer';
+                progressLabel.textContent = state.summary.players_answered + '/' + state.summary.players_required_to_answer + ' answer';
             }
         }
 
@@ -449,7 +457,9 @@
 
         if (!state.current_question.is_visible) {
             if (questionContent) {
-                questionContent.innerHTML = '<p>Soal masih dikunci. Semua player harus menyelesaikan bidding terlebih dahulu.</p>';
+                questionContent.innerHTML = state.summary.players_required_to_bid > 0
+                    ? '<p>Soal masih dikunci. Semua player aktif harus menyelesaikan bidding terlebih dahulu.</p>'
+                    : '<p>Tidak ada player yang punya poin cukup untuk ikut bidding ronde ini.</p>';
             }
 
             if (questionFeedback) {
@@ -459,7 +469,16 @@
                     hiddenLines.push('Game sedang dijeda oleh host.');
                 }
 
-                hiddenLines.push(String(state.summary.waiting_for_bid) + ' player lagi belum bid.');
+                if (state.summary.players_out_of_points > 0) {
+                    hiddenLines.push(String(state.summary.players_out_of_points) + ' player tidak punya poin cukup untuk ikut bidding ronde ini.');
+                }
+
+                if (state.summary.players_required_to_bid > 0) {
+                    hiddenLines.push(String(state.summary.waiting_for_bid) + ' player aktif lagi belum bid.');
+                } else {
+                    hiddenLines.push('Tidak ada player aktif yang bisa membuka soal.');
+                }
+
                 questionFeedback.innerHTML = hiddenLines.map(function (line) {
                     return '<p>' + escapeHtml(line) + '</p>';
                 }).join('');
@@ -509,7 +528,9 @@
         }
 
         if (!state.responses || !state.responses.length) {
-            responseList.innerHTML = '<div class="empty-state">Belum ada bid yang masuk pada ronde ini.</div>';
+            responseList.innerHTML = state.summary.players_required_to_bid > 0
+                ? '<div class="empty-state">Belum ada bid yang masuk pada ronde ini.</div>'
+                : '<div class="empty-state">Tidak ada player yang punya poin cukup untuk ikut bidding ronde ini.</div>';
             return;
         }
 
@@ -544,7 +565,9 @@
         }
 
         if (!state.responses || !state.responses.length) {
-            responseList.innerHTML = '<div class="empty-state">Belum ada bid yang masuk pada ronde ini.</div>';
+            responseList.innerHTML = state.summary.players_required_to_bid > 0
+                ? '<div class="empty-state">Belum ada bid yang masuk pada ronde ini.</div>'
+                : '<div class="empty-state">Tidak ada player yang punya poin cukup untuk ikut bidding ronde ini.</div>';
             return;
         }
 
@@ -719,7 +742,7 @@
         }
 
         if (bidLimitText) {
-            if (state.viewer.score <= 1) {
+            if (!state.viewer.has_enough_points_to_bid) {
                 bidLimitText.textContent = 'Saldo tidak cukup untuk bidding. Kamu harus punya minimal 2 poin.';
             } else {
                 bidLimitText.textContent = 'Bid minimal 1 poin dan maksimal ' + (state.viewer.score - 1) + ' poin.';
@@ -748,11 +771,15 @@
             if (bidStatus) {
                 bidStatus.textContent = state.viewer.has_bid
                     ? 'Bid kamu terkunci: ' + state.viewer.current_bid + ' poin.'
-                    : 'Kunci bid kamu. Soal akan muncul setelah semua player bid.';
+                    : (state.viewer.has_enough_points_to_bid
+                        ? 'Kunci bid kamu. Soal akan muncul setelah semua player aktif bid.'
+                        : 'Poin kamu tidak cukup untuk ikut ronde ini. Menunggu player lain.');
             }
 
             if (answerStatus) {
-                answerStatus.textContent = 'Form jawaban akan terbuka otomatis setelah fase bidding selesai.';
+                answerStatus.textContent = state.viewer.has_enough_points_to_bid
+                    ? 'Form jawaban akan terbuka otomatis setelah fase bidding selesai.'
+                    : 'Kamu melewati ronde ini karena poin tidak cukup untuk bidding.';
             }
 
             return;
@@ -772,12 +799,22 @@
         }
 
         if (bidStatus) {
-            bidStatus.textContent = 'Bid terkunci: ' + (state.viewer.current_bid || '-') + ' poin.';
+            if (state.viewer.current_bid) {
+                bidStatus.textContent = 'Bid terkunci: ' + state.viewer.current_bid + ' poin.';
+            } else if (!state.viewer.has_enough_points_to_bid) {
+                bidStatus.textContent = 'Kamu tidak ikut ronde ini karena poin tidak cukup untuk bidding.';
+            } else {
+                bidStatus.textContent = 'Kamu tidak ikut ronde ini.';
+            }
         }
 
         if (state.room.round_phase === 'answering') {
             if (answerForm) {
-                answerForm.classList.remove('hidden');
+                if (state.viewer.has_bid) {
+                    answerForm.classList.remove('hidden');
+                } else {
+                    answerForm.classList.add('hidden');
+                }
             }
 
             if (answerText) {
@@ -790,16 +827,24 @@
             }
 
             if (answerStatus) {
-                answerStatus.textContent = state.viewer.has_answer
-                    ? 'Jawaban kamu sudah terkunci. Menunggu player lain.'
-                    : 'Ketik jawaban teks kamu lalu kirim.';
+                if (state.viewer.has_answer) {
+                    answerStatus.textContent = 'Jawaban kamu sudah terkunci. Menunggu player lain.';
+                } else if (state.viewer.can_answer) {
+                    answerStatus.textContent = 'Ketik jawaban teks kamu lalu kirim.';
+                } else {
+                    answerStatus.textContent = 'Kamu tidak bisa menjawab karena tidak ikut bidding pada ronde ini.';
+                }
             }
 
             return;
         }
 
         if (answerForm) {
-            answerForm.classList.remove('hidden');
+            if (state.viewer.has_bid) {
+                answerForm.classList.remove('hidden');
+            } else {
+                answerForm.classList.add('hidden');
+            }
         }
 
         if (answerText) {
@@ -812,7 +857,9 @@
         }
 
         if (answerStatus) {
-            var resultText = 'Ronde sudah direview.';
+            var resultText = state.viewer.has_bid
+                ? 'Ronde sudah direview.'
+                : 'Kamu tidak ikut ronde ini.';
 
             if (state.viewer.current_answer) {
                 resultText += ' Jawaban kamu: ' + state.viewer.current_answer + '.';
@@ -861,9 +908,17 @@
             } else if (state.room.status === 'paused') {
                 moderatorSummary.textContent = 'Game sedang dijeda. Host bisa melanjutkan atau mengakhiri game.';
             } else if (state.room.round_phase === 'bidding') {
-                moderatorSummary.textContent = state.summary.players_bid + ' dari ' + state.summary.players_total + ' player sudah bid.';
+                if (state.summary.players_required_to_bid < 1) {
+                    moderatorSummary.textContent = 'Tidak ada player yang punya cukup poin untuk lanjut bidding.';
+                } else {
+                    moderatorSummary.textContent = state.summary.players_bid + ' dari ' + state.summary.players_required_to_bid + ' player aktif sudah bid.';
+                }
+
+                if (state.summary.players_out_of_points > 0) {
+                    moderatorSummary.textContent += ' ' + state.summary.players_out_of_points + ' player kehabisan poin.';
+                }
             } else if (state.room.round_phase === 'answering') {
-                moderatorSummary.textContent = state.summary.players_answered + ' dari ' + state.summary.players_total + ' player sudah menjawab.';
+                moderatorSummary.textContent = state.summary.players_answered + ' dari ' + state.summary.players_required_to_answer + ' player sudah menjawab.';
             } else {
                 moderatorSummary.textContent = 'Semua jawaban sudah dinilai. Moderator bisa lanjut ke ronde berikutnya.';
             }
@@ -914,11 +969,15 @@
 
         if (lobbyHint) {
             if (state.viewer.role === 'moderator') {
-                lobbyHint.textContent = state.room.can_start
-                    ? 'Room siap dimulai. Semua player akan masuk ke fase bidding bersama.'
-                    : 'Butuh minimal 1 player dan bank soal yang tersedia untuk memulai.';
+                if (state.room.can_start) {
+                    lobbyHint.textContent = 'Room siap dimulai. Semua player aktif akan masuk ke fase bidding bersama.';
+                } else if (state.summary.players_total > 0 && state.summary.players_required_to_bid < 1) {
+                    lobbyHint.textContent = 'Belum ada player yang punya minimal 2 poin untuk ikut bidding.';
+                } else {
+                    lobbyHint.textContent = 'Butuh minimal 1 player aktif dan bank soal yang tersedia untuk memulai.';
+                }
             } else {
-                lobbyHint.textContent = 'Tunggu moderator memulai game. Setelah mulai, semua player akan bidding dulu.';
+                lobbyHint.textContent = 'Tunggu moderator memulai game. Setelah mulai, semua player yang punya minimal 2 poin akan bidding dulu.';
             }
         }
 

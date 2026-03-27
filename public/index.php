@@ -101,7 +101,7 @@ if ($existingUserId > 0 && $existingRoomId > 0) {
                 <h3>1. Bid dulu, baru jawab.</h3>
                 <p>
                     Setiap player memulai dengan 1000 poin. Bid harus lebih dari 0 dan wajib menyisakan
-                    minimal 1 poin.
+                    minimal 1 poin. Jika saldo tinggal 1 atau 0, player akan melewati ronde bidding berikutnya.
                 </p>
             </article>
 

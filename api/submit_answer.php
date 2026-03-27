@@ -46,7 +46,7 @@ try {
 
     if (($freshRoom['round_phase'] ?? '') !== 'answering') {
         $pdo->rollBack();
-        fail('Jawaban belum dibuka. Semua player harus selesai bidding terlebih dahulu.');
+        fail('Jawaban belum dibuka. Semua player aktif harus selesai bidding terlebih dahulu.');
     }
 
     $questionStatement = $pdo->prepare('SELECT * FROM questions WHERE id = ? LIMIT 1');
@@ -108,7 +108,7 @@ try {
 
     ok([
         'message' => $allPlayersAnswered
-            ? 'Jawaban berhasil disimpan. Semua player sudah menjawab dan ronde telah dinilai.'
+            ? 'Jawaban berhasil disimpan. Semua player yang ikut ronde sudah menjawab dan ronde telah dinilai.'
             : 'Jawaban berhasil disimpan. Menunggu player lain menjawab.',
         'round_reviewed' => $allPlayersAnswered,
         'is_correct' => $result['is_correct'] === null ? null : (bool) $result['is_correct'],
