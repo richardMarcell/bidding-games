@@ -355,9 +355,14 @@ function getRankingData(PDO $pdo, int $roomId): array
     ];
 }
 
+function getMaxBidAmountForScore(int $score): int
+{
+    return $score > 1 ? intdiv($score, 2) : 0;
+}
+
 function canBidWithScore(int $score): bool
 {
-    return $score > 1;
+    return getMaxBidAmountForScore($score) >= 1;
 }
 
 function countBidEligiblePlayers(PDO $pdo, int $roomId): int
@@ -842,6 +847,9 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
     $viewerHasBid = $viewerBid !== null;
     $viewerHasAnswer = $viewerHasBid && ($viewerBid['has_answer'] ?? false);
     $viewerHasEnoughPointsToBid = $viewerRole === 'player' && canBidWithScore((int) ($viewer['score'] ?? 0));
+    $viewerMaxBidAmount = $viewerRole === 'player'
+        ? getMaxBidAmountForScore((int) ($viewer['score'] ?? 0))
+        : null;
     $answerTimerSecondsLeft = getAnswerTimerSecondsLeft($pdo, $room);
     $questionVisible = $currentQuestion
         && in_array($room['status'], ['playing', 'paused'], true)
@@ -901,6 +909,7 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
             'role' => $viewerRole,
             'score' => $viewerScore,
             'has_enough_points_to_bid' => $viewerHasEnoughPointsToBid,
+            'max_bid_amount' => $viewerMaxBidAmount,
             'has_bid' => $viewerHasBid,
             'has_answer' => $viewerHasAnswer,
             'current_bid' => $viewerBid['bid_amount'] ?? null,

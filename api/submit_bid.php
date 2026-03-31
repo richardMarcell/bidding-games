@@ -50,6 +50,7 @@ try {
     }
 
     $score = (int) $freshUser['score'];
+    $maxBidAmount = getMaxBidAmountForScore($score);
 
     if (!canBidWithScore($score)) {
         $pdo->rollBack();
@@ -61,9 +62,11 @@ try {
         fail('Bid minimal adalah 1 poin.');
     }
 
-    if ($bidAmount >= $score) {
+    if ($bidAmount > $maxBidAmount) {
         $pdo->rollBack();
-        fail('Bid harus menyisakan minimal 1 poin. All-in tidak diperbolehkan.');
+        fail(
+            'Bid maksimal adalah ' . $maxBidAmount . ' poin (50% dari saldo Anda, dibulatkan ke bawah).'
+        );
     }
 
     $existingStatement = $pdo->prepare(
@@ -103,6 +106,7 @@ try {
             ? 'Bid berhasil disimpan. Semua player sudah bid, soal sekarang dibuka.'
             : 'Bid berhasil disimpan. Menunggu player lain menyelesaikan bidding.',
         'bid_amount' => $bidAmount,
+        'max_bid_amount' => $maxBidAmount,
         'all_players_bid' => $allPlayersReady,
     ]);
 } catch (Throwable $exception) {

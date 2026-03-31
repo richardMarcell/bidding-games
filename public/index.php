@@ -108,8 +108,9 @@ if ($existingUserId > 0 && $existingRoomId > 0) {
                 <span class="eyebrow">Alur Main</span>
                 <h3>1. Bid dulu, baru jawab.</h3>
                 <p>
-                    Setiap player memulai dengan 1000 poin. Bid harus lebih dari 0 dan wajib menyisakan
-                    minimal 1 poin. Jika saldo tinggal 1 atau 0, player akan melewati ronde bidding berikutnya.
+                    Setiap player memulai dengan 1000 poin. Bid harus lebih dari 0 dan maksimal 50%
+                    dari poin yang dimiliki pada ronde itu. Karena bid berupa bilangan bulat, batas 50%
+                    akan dibulatkan ke bawah. Jika saldo tinggal 1 atau 0, player akan melewati ronde bidding berikutnya.
                 </p>
             </article>
 

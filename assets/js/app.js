@@ -91,6 +91,14 @@
         return phase || '-';
     }
 
+    function getViewerMaxBidAmount(state) {
+        if (!state || !state.viewer) {
+            return 0;
+        }
+
+        return Math.max(0, Number(state.viewer.max_bid_amount || 0));
+    }
+
     function getAnswerTimerDuration(state) {
         var duration = state && state.room ? Number(state.room.answer_timer_duration_seconds || 0) : 0;
 
@@ -963,6 +971,11 @@
         var answerText = byId('answerText');
         var answerSubmitBtn = byId('answerSubmitBtn');
         var answerStatus = byId('answerStatus');
+        var viewerMaxBidAmount = getViewerMaxBidAmount(state);
+
+        if (bidAmount) {
+            bidAmount.max = Math.max(1, viewerMaxBidAmount);
+        }
 
         if (state.room.status === 'finished') {
             if (bidForm) {
@@ -1030,7 +1043,9 @@
             if (!state.viewer.has_enough_points_to_bid) {
                 bidLimitText.textContent = 'Saldo tidak cukup untuk bidding. Kamu harus punya minimal 2 poin.';
             } else {
-                bidLimitText.textContent = 'Bid minimal 1 poin dan maksimal ' + (state.viewer.score - 1) + ' poin.';
+                bidLimitText.textContent =
+                    'Bid minimal 1 poin dan maksimal ' + viewerMaxBidAmount +
+                    ' poin (50% dari saldo saat ini, dibulatkan ke bawah).';
             }
         }
 
@@ -1045,7 +1060,6 @@
 
             if (bidAmount) {
                 bidAmount.disabled = !state.viewer.can_bid;
-                bidAmount.max = Math.max(1, state.viewer.score - 1);
                 bidAmount.value = state.viewer.has_bid ? state.viewer.current_bid : drafts.bid;
             }
 
@@ -1539,6 +1553,7 @@
 
         if (bidAmount) {
             bidAmount.addEventListener('input', function () {
+                bidAmount.setCustomValidity('');
                 drafts.bid = bidAmount.value;
             });
         }
@@ -1553,6 +1568,29 @@
             bidForm.addEventListener('submit', async function (event) {
                 event.preventDefault();
                 var bidSubmitBtn = byId('bidSubmitBtn');
+                var maxBidAmount = getViewerMaxBidAmount(currentState);
+
+                if (bidAmount) {
+                    bidAmount.setCustomValidity('');
+
+                    if (maxBidAmount >= 1 && Number(bidAmount.value) > maxBidAmount) {
+                        bidAmount.setCustomValidity(
+                            'Bid maksimal adalah ' + maxBidAmount + ' poin (50% dari saldo saat ini).'
+                        );
+                    }
+                }
+
+                if (typeof bidForm.reportValidity === 'function' && !bidForm.reportValidity()) {
+                    if (bidAmount) {
+                        bidAmount.setCustomValidity('');
+                    }
+
+                    return;
+                }
+
+                if (bidAmount) {
+                    bidAmount.setCustomValidity('');
+                }
 
                 setButtonBusy(bidSubmitBtn, true, 'Mengunci...');
 
