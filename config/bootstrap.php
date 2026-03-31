@@ -621,6 +621,25 @@ function getAnswerTimerSecondsLeft(PDO $pdo, array $room): ?int
     return (int) $secondsLeft;
 }
 
+function isWithinAnswerAutoSubmitGraceWindow(PDO $pdo, array $room, int $graceSeconds = 2): bool
+{
+    if (($room['status'] ?? '') !== 'playing'
+        || ($room['round_phase'] ?? '') !== 'answering'
+        || empty($room['answer_deadline_at'])) {
+        return false;
+    }
+
+    $statement = $pdo->prepare(
+        "SELECT CURRENT_TIMESTAMP <= DATE_ADD(answer_deadline_at, INTERVAL " . max(1, $graceSeconds) . " SECOND)
+         FROM rooms
+         WHERE id = ?
+         LIMIT 1"
+    );
+    $statement->execute([(int) $room['id']]);
+
+    return (bool) $statement->fetchColumn();
+}
+
 function expireAnsweringRoundIfNeeded(PDO $pdo, array $room): array
 {
     if (

@@ -38,7 +38,8 @@
         baseSeconds: null,
         receivedAt: 0,
         paused: false,
-        expiredHandled: false
+        expiredHandled: false,
+        nearExpiryHandled: false
     };
 
     function byId(id) {
@@ -149,6 +150,7 @@
             countdownSnapshot.receivedAt = 0;
             countdownSnapshot.paused = false;
             countdownSnapshot.expiredHandled = false;
+            countdownSnapshot.nearExpiryHandled = false;
             return;
         }
 
@@ -168,6 +170,7 @@
         countdownSnapshot.receivedAt = Date.now();
         countdownSnapshot.paused = !!state.room.answer_timer_paused;
         countdownSnapshot.expiredHandled = false;
+        countdownSnapshot.nearExpiryHandled = false;
     }
 
     function getLiveAnswerTimerSeconds(state) {
@@ -482,6 +485,38 @@
         await pollState();
     }
 
+    async function maybeHandleNearExpiryAnswerAutoSubmit() {
+        if (!currentState || !currentState.room || !currentState.room.answer_timer_active) {
+            return;
+        }
+
+        if (countdownSnapshot.nearExpiryHandled || answerAutoSubmitInFlight) {
+            return;
+        }
+
+        if (!currentState.viewer
+            || currentState.viewer.role !== 'player'
+            || !currentState.viewer.can_answer) {
+            return;
+        }
+
+        var secondsLeft = getLiveAnswerTimerSeconds(currentState);
+
+        if (secondsLeft === null || secondsLeft > 2 || secondsLeft <= 0) {
+            return;
+        }
+
+        var answerText = byId('answerText');
+        var answerValue = answerText ? answerText.value : drafts.answer;
+
+        if (!String(answerValue || '').trim()) {
+            return;
+        }
+
+        countdownSnapshot.nearExpiryHandled = true;
+        await submitAnswerValue(answerValue, { autoSubmit: true });
+    }
+
     function startCountdownTicker() {
         if (countdownTimer) {
             window.clearInterval(countdownTimer);
@@ -493,6 +528,7 @@
             }
 
             renderAnswerTimer(currentState);
+            maybeHandleNearExpiryAnswerAutoSubmit();
             maybeHandleAnswerTimerExpiry();
         }, 250);
     }

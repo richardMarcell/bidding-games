@@ -35,7 +35,13 @@ try {
         fail('Data room atau user tidak ditemukan.', 404);
     }
 
-    $freshRoom = expireAnsweringRoundIfNeeded($pdo, $freshRoom);
+    $canUseAutoSubmitGrace = $isAutoSubmit
+        && $answer !== ''
+        && isWithinAnswerAutoSubmitGraceWindow($pdo, $freshRoom);
+
+    if (!$canUseAutoSubmitGrace) {
+        $freshRoom = expireAnsweringRoundIfNeeded($pdo, $freshRoom);
+    }
 
     if ($freshRoom['status'] === 'paused') {
         $pdo->rollBack();
