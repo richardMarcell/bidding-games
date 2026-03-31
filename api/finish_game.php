@@ -35,15 +35,7 @@ try {
         fail('Game sudah selesai.');
     }
 
-    $updateStatement = $pdo->prepare(
-        "UPDATE rooms
-         SET status = 'finished',
-             current_question_id = NULL,
-             answer_deadline_at = NULL,
-             answer_time_remaining_seconds = NULL
-         WHERE id = ?"
-    );
-    $updateStatement->execute([(int) $freshRoom['id']]);
+    finishRoom($pdo, (int) $freshRoom['id']);
 
     $pdo->commit();
 

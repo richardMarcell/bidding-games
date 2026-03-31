@@ -7,7 +7,7 @@ if (session_status() === PHP_SESSION_NONE) {
 
 $pdo = require __DIR__ . '/database.php';
 
-const ANSWER_TIME_LIMIT_SECONDS = 15;
+const ANSWER_TIME_LIMIT_SECONDS = 20;
 
 function ensureAnswerTimerSchema(PDO $pdo): void
 {
@@ -289,7 +289,7 @@ function getAcceptedAnswers(array $question): array
     $rawValues = array_filter([
         (string) ($question['correct_answer'] ?? ''),
         (string) ($question['answer_aliases'] ?? ''),
-    ], static fn ($value): bool => trim($value) !== '');
+    ], static fn($value): bool => trim($value) !== '');
 
     foreach ($rawValues as $rawValue) {
         $parts = explode('|', $rawValue);
@@ -372,6 +372,18 @@ function countBidEligiblePlayers(PDO $pdo, int $roomId): int
     return (int) $statement->fetchColumn();
 }
 
+function countPlayerUsers(PDO $pdo, int $roomId): int
+{
+    $statement = $pdo->prepare(
+        "SELECT COUNT(*)
+         FROM users
+         WHERE room_id = ? AND role = 'player'"
+    );
+    $statement->execute([$roomId]);
+
+    return (int) $statement->fetchColumn();
+}
+
 function countRoundBids(PDO $pdo, int $roomId, int $questionId): int
 {
     $statement = $pdo->prepare(
@@ -392,7 +404,7 @@ function countRoundAnswers(PDO $pdo, int $roomId, int $questionId): int
          FROM bids b
          INNER JOIN users u ON u.id = b.user_id
          WHERE b.room_id = ? AND b.question_id = ? AND u.role = 'player'
-           AND b.answer_text IS NOT NULL AND b.answer_text <> ''"
+           AND b.answered_at IS NOT NULL"
     );
     $statement->execute([$roomId, $questionId]);
 
@@ -464,6 +476,114 @@ function evaluateCurrentRound(PDO $pdo, array $room): void
     }
 }
 
+function startAnsweringPhase(PDO $pdo, array $room, ?int $secondsLeft = null): void
+{
+    $roomId = (int) $room['id'];
+    $seconds = max(1, $secondsLeft ?? ANSWER_TIME_LIMIT_SECONDS);
+
+    if (($room['status'] ?? '') === 'paused') {
+        $statement = $pdo->prepare(
+            "UPDATE rooms
+             SET round_phase = 'answering',
+                 answer_deadline_at = NULL,
+                 answer_time_remaining_seconds = ?
+             WHERE id = ?"
+        );
+        $statement->execute([$seconds, $roomId]);
+
+        return;
+    }
+
+    $statement = $pdo->prepare(
+        "UPDATE rooms
+         SET round_phase = 'answering',
+             answer_deadline_at = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL " . $seconds . " SECOND),
+             answer_time_remaining_seconds = NULL
+         WHERE id = ?"
+    );
+    $statement->execute([$roomId]);
+}
+
+function moveRoomToReview(PDO $pdo, int $roomId): void
+{
+    $statement = $pdo->prepare(
+        "UPDATE rooms
+         SET round_phase = 'review',
+             answer_deadline_at = NULL,
+             answer_time_remaining_seconds = NULL
+         WHERE id = ?"
+    );
+    $statement->execute([$roomId]);
+}
+
+function finishRoom(PDO $pdo, int $roomId): void
+{
+    $statement = $pdo->prepare(
+        "UPDATE rooms
+         SET status = 'finished',
+             current_question_id = NULL,
+             answer_deadline_at = NULL,
+             answer_time_remaining_seconds = NULL
+         WHERE id = ?"
+    );
+    $statement->execute([$roomId]);
+}
+
+function synchronizeRoomAfterPlayerRemoval(PDO $pdo, array $room): array
+{
+    $roomId = (int) $room['id'];
+    $status = (string) ($room['status'] ?? '');
+    $phase = (string) ($room['round_phase'] ?? '');
+    $questionId = (int) ($room['current_question_id'] ?? 0);
+
+    if ($status === 'finished') {
+        return $room;
+    }
+
+    if ($status !== 'waiting' && countPlayerUsers($pdo, $roomId) < 1) {
+        finishRoom($pdo, $roomId);
+
+        return fetchRoomById($pdo, $roomId) ?: $room;
+    }
+
+    if ($status === 'waiting' || $questionId < 1) {
+        return $room;
+    }
+
+    if ($phase === 'bidding') {
+        if (countBidEligiblePlayers($pdo, $roomId) < 1) {
+            finishRoom($pdo, $roomId);
+
+            return fetchRoomById($pdo, $roomId) ?: $room;
+        }
+
+        if (allPlayersHaveBid($pdo, $roomId, $questionId)) {
+            startAnsweringPhase($pdo, $room);
+
+            return fetchRoomById($pdo, $roomId) ?: $room;
+        }
+
+        return $room;
+    }
+
+    if ($phase === 'answering') {
+        if (countRoundBids($pdo, $roomId, $questionId) < 1) {
+            moveRoomToReview($pdo, $roomId);
+
+            return fetchRoomById($pdo, $roomId) ?: $room;
+        }
+
+        if (allPlayersHaveAnswered($pdo, $roomId, $questionId)) {
+            evaluateCurrentRound($pdo, $room);
+            moveRoomToReview($pdo, $roomId);
+
+            return fetchRoomById($pdo, $roomId) ?: $room;
+        }
+    }
+
+    return $room;
+}
+
 function getAnswerTimerSecondsLeft(PDO $pdo, array $room): ?int
 {
     if (($room['round_phase'] ?? '') !== 'answering') {
@@ -503,10 +623,12 @@ function getAnswerTimerSecondsLeft(PDO $pdo, array $room): ?int
 
 function expireAnsweringRoundIfNeeded(PDO $pdo, array $room): array
 {
-    if (($room['status'] ?? '') !== 'playing'
+    if (
+        ($room['status'] ?? '') !== 'playing'
         || ($room['round_phase'] ?? '') !== 'answering'
         || empty($room['current_question_id'])
-        || empty($room['answer_deadline_at'])) {
+        || empty($room['answer_deadline_at'])
+    ) {
         return $room;
     }
 
@@ -534,14 +656,7 @@ function expireAnsweringRoundIfNeeded(PDO $pdo, array $room): array
 
     evaluateCurrentRound($pdo, $room);
 
-    $updateRoomStatement = $pdo->prepare(
-        "UPDATE rooms
-         SET round_phase = 'review',
-             answer_deadline_at = NULL,
-             answer_time_remaining_seconds = NULL
-         WHERE id = ?"
-    );
-    $updateRoomStatement->execute([(int) $room['id']]);
+    moveRoomToReview($pdo, (int) $room['id']);
 
     $room['round_phase'] = 'review';
     $room['answer_deadline_at'] = null;
@@ -626,7 +741,7 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
 
     if ($currentQuestion) {
         $responseStatement = $pdo->prepare(
-            "SELECT b.user_id, u.username, u.role, b.bid_amount, b.answer_text, b.is_correct, b.score_delta, b.evaluated_at
+            "SELECT b.user_id, u.username, u.role, b.bid_amount, b.answer_text, b.answered_at, b.is_correct, b.score_delta, b.evaluated_at
              FROM bids b
              INNER JOIN users u ON u.id = b.user_id
              WHERE b.room_id = ? AND b.question_id = ?
@@ -641,7 +756,8 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
             }
 
             $userId = (int) $row['user_id'];
-            $hasAnswer = $row['answer_text'] !== null && trim((string) $row['answer_text']) !== '';
+            $hasAnswer = $row['answered_at'] !== null;
+            $hasAnswerText = trim((string) ($row['answer_text'] ?? '')) !== '';
             $canSeeAnswerText = $viewerRole === 'moderator'
                 || ($viewerRole === 'player' && $viewerId === $userId);
             $canSeeJudgement = $viewerRole === 'moderator'
@@ -653,6 +769,7 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
                 'is_correct' => $row['is_correct'] === null ? null : (bool) $row['is_correct'],
                 'score_delta' => (int) $row['score_delta'],
                 'has_answer' => $hasAnswer,
+                'has_answer_text' => $hasAnswerText,
             ];
 
             $playersBid++;
@@ -670,6 +787,7 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
                 'username' => $row['username'],
                 'bid_amount' => (int) $row['bid_amount'],
                 'has_answer' => $hasAnswer,
+                'has_answer_text' => $hasAnswerText,
                 'answer_text' => $canSeeAnswerText ? $row['answer_text'] : null,
                 'is_correct' => $canSeeJudgement ? ($row['is_correct'] === null ? null : (bool) $row['is_correct']) : null,
                 'score_delta' => $canSeeJudgement ? (int) $row['score_delta'] : null,
@@ -693,7 +811,11 @@ function buildRoomState(PDO $pdo, array $viewer, array $room): array
                 && canBidWithScore((int) $player['score']),
             'has_bid' => $bidData !== null,
             'has_answer' => $bidData['has_answer'] ?? false,
+            'has_answer_text' => $bidData['has_answer_text'] ?? false,
             'current_bid' => $bidData['bid_amount'] ?? null,
+            'can_be_kicked' => $viewerRole === 'moderator'
+                && $player['role'] === 'player'
+                && $room['status'] !== 'finished',
         ];
     }
 

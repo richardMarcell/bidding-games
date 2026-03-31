@@ -93,14 +93,7 @@ try {
     $allPlayersReady = allPlayersHaveBid($pdo, (int) $freshRoom['id'], (int) $freshRoom['current_question_id']);
 
     if ($allPlayersReady) {
-        $updateRoomStatement = $pdo->prepare(
-            "UPDATE rooms
-             SET round_phase = 'answering',
-                 answer_deadline_at = DATE_ADD(CURRENT_TIMESTAMP, INTERVAL " . ANSWER_TIME_LIMIT_SECONDS . " SECOND),
-                 answer_time_remaining_seconds = NULL
-             WHERE id = ?"
-        );
-        $updateRoomStatement->execute([(int) $freshRoom['id']]);
+        startAnsweringPhase($pdo, $freshRoom);
     }
 
     $pdo->commit();

@@ -95,6 +95,7 @@ $stateJson = json_encode($state, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES
                 <div class="mini-notes">
                     <p>Game sekarang dimulai dengan fase bidding bersama untuk semua player yang masih punya cukup poin.</p>
                     <p>Soal akan muncul otomatis hanya setelah semua player aktif selesai mengunci bid.</p>
+                    <p>Moderator bisa kick player langsung dari daftar peserta bila diperlukan.</p>
                     <p>Player yang baru join akan muncul otomatis setiap polling.</p>
                     <p>Kode room ini bisa dibagikan ke peserta lain: <strong><?= escape($state['room']['code']) ?></strong></p>
                 </div>

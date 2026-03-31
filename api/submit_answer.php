@@ -12,9 +12,10 @@ $room = $context['room'];
 requirePlayer($user);
 
 $data = getRequestData();
+$isAutoSubmit = !empty($data['auto_submit']);
 $answer = sanitizeTextAnswer((string) ($data['answer'] ?? ''));
 
-if ($answer === '') {
+if ($answer === '' && !$isAutoSubmit) {
     fail('Jawaban tidak boleh kosong.');
 }
 
@@ -84,7 +85,7 @@ try {
         fail('Anda harus melakukan bid sebelum menjawab.');
     }
 
-    if ($bid['answer_text'] !== null && trim((string) $bid['answer_text']) !== '') {
+    if ($bid['answered_at'] !== null) {
         $pdo->rollBack();
         fail('Jawaban untuk soal ini sudah dikirim.');
     }
@@ -101,15 +102,7 @@ try {
 
     if ($allPlayersAnswered) {
         evaluateCurrentRound($pdo, $freshRoom);
-
-        $updateRoomStatement = $pdo->prepare(
-            "UPDATE rooms
-             SET round_phase = 'review',
-                 answer_deadline_at = NULL,
-                 answer_time_remaining_seconds = NULL
-             WHERE id = ?"
-        );
-        $updateRoomStatement->execute([(int) $freshRoom['id']]);
+        moveRoomToReview($pdo, (int) $freshRoom['id']);
     }
 
     $pdo->commit();
@@ -124,8 +117,12 @@ try {
     ok([
         'message' => $allPlayersAnswered
             ? 'Jawaban berhasil disimpan. Semua player yang ikut ronde sudah menjawab dan ronde telah dinilai.'
-            : 'Jawaban berhasil disimpan. Menunggu player lain menjawab.',
+            : ($isAutoSubmit && $answer === ''
+                ? 'Waktu habis. Sistem mengunci jawaban kosong dan menunggu player lain.'
+                : 'Jawaban berhasil disimpan. Menunggu player lain menjawab.'),
         'round_reviewed' => $allPlayersAnswered,
+        'auto_submitted' => $isAutoSubmit,
+        'submitted_empty_answer' => $answer === '',
         'is_correct' => $result['is_correct'] === null ? null : (bool) $result['is_correct'],
         'score_delta' => (int) $result['score_delta'],
         'new_score' => (int) ($updatedUser['score'] ?? $freshUser['score']),

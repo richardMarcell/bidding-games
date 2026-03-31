@@ -90,6 +90,12 @@
         return phase || '-';
     }
 
+    function getAnswerTimerDuration(state) {
+        var duration = state && state.room ? Number(state.room.answer_timer_duration_seconds || 0) : 0;
+
+        return duration > 0 ? duration : 0;
+    }
+
     function describeRoom(state) {
         if (!state || !state.room) {
             return '';
@@ -116,7 +122,7 @@
         }
 
         if (state.room.round_phase === 'answering') {
-            return 'Soal sudah terbuka. Semua player yang sudah bid hanya punya 15 detik untuk menjawab secara bersamaan.';
+            return 'Soal sudah terbuka. Semua player yang sudah bid punya ' + getAnswerTimerDuration(state) + ' detik untuk menjawab secara bersamaan.';
         }
 
         if (state.room.round_phase === 'review') {
@@ -393,7 +399,7 @@
         var answerSubmitBtn = byId('answerSubmitBtn');
         var isAutoSubmit = !!(options && options.autoSubmit);
 
-        if (!trimmedAnswer) {
+        if (!trimmedAnswer && !isAutoSubmit) {
             if (!isAutoSubmit) {
                 showMessage('Jawaban teks tidak boleh kosong.', 'error');
             }
@@ -409,7 +415,8 @@
 
         try {
             var payload = await sendRequest(apiBase + '/submit_answer.php', 'POST', {
-                answer: answerValue
+                answer: answerValue,
+                auto_submit: isAutoSubmit
             });
 
             drafts.answer = answerValue;
@@ -417,7 +424,13 @@
             if (payload.round_reviewed && payload.correct_answer) {
                 showMessage(payload.message + ' Kunci: ' + payload.correct_answer + '.', 'success', 5000);
             } else if (isAutoSubmit) {
-                showMessage('Waktu habis. Jawaban terakhir kamu berhasil dikirim otomatis.', 'success', 4000);
+                showMessage(
+                    payload.submitted_empty_answer
+                        ? 'Waktu habis. Sistem mengunci jawaban kosong secara otomatis.'
+                        : 'Waktu habis. Jawaban terakhir kamu berhasil dikirim otomatis.',
+                    'success',
+                    4000
+                );
             } else {
                 showMessage(payload.message, 'success');
             }
@@ -462,10 +475,8 @@
             var answerText = byId('answerText');
             var answerValue = answerText ? answerText.value : drafts.answer;
 
-            if (String(answerValue || '').trim()) {
-                await submitAnswerValue(answerValue, { autoSubmit: true });
-                return;
-            }
+            await submitAnswerValue(answerValue, { autoSubmit: true });
+            return;
         }
 
         await pollState();
@@ -539,10 +550,10 @@
 
         if (phase === 'review' || phase === 'finished') {
             if (player.has_answer) {
-                line += ' | Jawaban masuk';
+                line += player.has_answer_text ? ' | Jawaban masuk' : ' | Jawaban kosong';
             }
         } else if (player.has_answer) {
-            line += ' | Jawaban terkunci';
+            line += player.has_answer_text ? ' | Jawaban terkunci' : ' | Jawaban kosong';
         } else if (phase === 'answering') {
             line += ' | Menunggu jawaban';
         }
@@ -567,6 +578,10 @@
             : (state.room.status === 'finished' ? 'finished' : state.room.round_phase);
 
         playerList.innerHTML = state.players.map(function (player) {
+            var kickButton = player.can_be_kicked
+                ? '<button type="button" class="button button-danger button-small" data-action="kick-player" data-user-id="' + escapeHtml(String(player.id)) + '" data-username="' + escapeHtml(player.username) + '">Kick Player</button>'
+                : '';
+
             return (
                 '<article class="list-card list-card-compact">' +
                     '<div class="list-card-head">' +
@@ -574,7 +589,10 @@
                             '<h3>' + escapeHtml(player.username) + '</h3>' +
                             '<span class="role-badge role-' + escapeHtml(player.role) + '">' + escapeHtml(formatRole(player.role)) + '</span>' +
                         '</div>' +
-                        '<span class="score-chip">' + escapeHtml(String(player.score)) + ' pts</span>' +
+                        '<div class="list-card-side">' +
+                            '<span class="score-chip">' + escapeHtml(String(player.score)) + ' pts</span>' +
+                            kickButton +
+                        '</div>' +
                     '</div>' +
                     '<p class="soft-text">' + escapeHtml(buildPlayerStateLine(player, phaseKey)) + '</p>' +
                 '</article>'
@@ -720,7 +738,7 @@
 
             if (state.room.round_phase === 'answering') {
                 lines.push('Semua jawaban diproses bersama setelah seluruh player selesai menjawab.');
-                lines.push('Jika waktu habis sebelum dikirim, sistem akan auto-submit jawaban yang belum masuk.');
+                lines.push('Jika waktu habis, sistem akan mengunci jawaban terakhir atau jawaban kosong secara otomatis.');
                 lines.push(state.summary.waiting_for_answer + ' player lagi belum mengirim jawaban.');
 
                 if (hasAnswerTimer(state)) {
@@ -767,7 +785,7 @@
             if (state.room.round_phase === 'bidding') {
                 lines.push('Bid terkunci');
             } else if (item.has_answer) {
-                lines.push('Sudah menjawab');
+                lines.push(item.has_answer_text ? 'Sudah menjawab' : 'Jawaban kosong terkunci');
             } else {
                 lines.push('Menunggu jawaban');
             }
@@ -804,14 +822,16 @@
             if (item.is_correct === true) {
                 statusLabel = 'Benar';
             } else if (item.is_correct === false) {
-                statusLabel = 'Salah';
+                statusLabel = item.has_answer_text ? 'Salah' : 'Salah karena kosong';
             } else if (item.has_answer) {
-                statusLabel = 'Jawaban masuk';
+                statusLabel = item.has_answer_text ? 'Jawaban masuk' : 'Jawaban kosong terkunci';
             }
 
             var answerBody = item.answer_text
                 ? '<pre class="answer-bubble">' + escapeHtml(item.answer_text) + '</pre>'
-                : '<div class="answer-empty">Belum ada jawaban dikirim.</div>';
+                : '<div class="answer-empty">' + (item.has_answer
+                    ? 'Jawaban tidak diketik atau waktu pemain habis.'
+                    : 'Belum ada jawaban dikirim.') + '</div>';
 
             var meta = [
                 'Bid ' + item.bid_amount + ' poin',
@@ -1059,7 +1079,7 @@
                 if (state.viewer.has_answer) {
                     answerStatus.textContent = 'Jawaban kamu sudah terkunci. Menunggu player lain.';
                 } else if (state.viewer.can_answer) {
-                    answerStatus.textContent = 'Ketik jawaban teks kamu lalu kirim. Jika waktu habis, draft yang sudah kamu tulis akan dicoba dikirim otomatis.';
+                    answerStatus.textContent = 'Ketik jawaban singkat lalu kirim. Jika waktu habis, sistem akan otomatis mengunci jawaban terakhir atau jawaban kosong.';
                 } else {
                     answerStatus.textContent = 'Kamu tidak bisa menjawab karena tidak ikut bidding pada ronde ini.';
                 }
@@ -1308,6 +1328,50 @@
         }
     }
 
+    function bindModeratorKickActions() {
+        document.addEventListener('click', async function (event) {
+            var trigger = event.target.closest('[data-action="kick-player"]');
+
+            if (!trigger) {
+                return;
+            }
+
+            event.preventDefault();
+
+            if (trigger.disabled) {
+                return;
+            }
+
+            var userId = Number(trigger.getAttribute('data-user-id') || 0);
+            var username = trigger.getAttribute('data-username') || 'player ini';
+
+            if (userId < 1) {
+                showMessage('Player tidak valid.', 'error');
+                return;
+            }
+
+            if (!window.confirm('Keluarkan ' + username + ' dari room ini?')) {
+                return;
+            }
+
+            setButtonBusy(trigger, true, 'Mengeluarkan...');
+
+            try {
+                var payload = await sendRequest(apiBase + '/kick_player.php', 'POST', {
+                    user_id: userId
+                });
+
+                showMessage(payload.message, 'success');
+                await pollState();
+            } catch (error) {
+                showMessage(error.message, 'error');
+            } finally {
+                setButtonBusy(trigger, false);
+                renderCoreState(currentState);
+            }
+        });
+    }
+
     function startRoomPolling() {
         if (page !== 'index') {
             return;
@@ -1396,6 +1460,7 @@
         lastStateKey = stateKey(currentState);
         renderCoreState(currentState);
         startStatePolling();
+        bindModeratorKickActions();
 
         var startGameBtn = byId('startGameBtn');
 
@@ -1426,6 +1491,7 @@
         renderCoreState(currentState);
         startStatePolling();
         startCountdownTicker();
+        bindModeratorKickActions();
 
         var bidAmount = byId('bidAmount');
         var bidForm = byId('bidForm');

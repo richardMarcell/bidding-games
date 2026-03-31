@@ -94,6 +94,7 @@ $isModerator = $user['role'] === 'moderator';
                     <div class="mini-notes">
                         <p>Hanya host yang bisa melihat isi jawaban semua player.</p>
                         <p>Host bisa pause kapan saja tanpa menghilangkan progres ronde.</p>
+                        <p>Host juga bisa kick player langsung dari daftar peserta.</p>
                         <p>Fase review selesai dulu sebelum pindah ronde.</p>
                     </div>
                 </aside>
